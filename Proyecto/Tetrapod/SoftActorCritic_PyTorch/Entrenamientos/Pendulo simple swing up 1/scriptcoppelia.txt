@@ -1,0 +1,201 @@
+-- sim.adjustView
+function createAgent ()
+    -- Restore the agent
+    agent=sim.loadModel(agentData)
+
+    -- Get agent handles
+    joint[ 1] = sim.getObject("/pendulo1")
+    joint[ 2] = sim.getObject("/pendulo2")
+    --joint[ 3] = sim.getObject("/pendulo3")
+    carrito = sim.getObject("/carrito")
+    palito = sim.getObject("/palito")
+    cubo_carrito = sim.getObject("/cubo_carrito")
+   
+end
+
+function destroyAgent ()
+    sim.removeModel(agent)
+end
+
+function sysCall_init() -- Executed when the scene is loaded
+    sim = require('sim')
+
+    local HOST, PORT = "127.0.0.1", 57175
+    local socket = require('socket')
+    
+    joints_number = 2
+    joint = {}
+    reset_pos={0.0,0.0,0.233}
+    reset_or = {0.0,0.0,0.0}
+    mode = 0
+    
+    agentCreated = false
+    
+       
+    
+    pendulo1_llim, pendulo1_ulim = -180.0*math.pi/180.0, 180.0*math.pi/180.0
+    pendulo2_llim, pendulo2_ulim = -180.0*math.pi/180.0, 180.0*math.pi/180.0
+    pendulo3_llim, pendulo3_ulim = -180.0*math.pi/180.0, 180.0*math.pi/180.0
+
+    
+    jointLowerLimit = {pendulo1_llim, pendulo2_llim,pendulo3_llim}
+    jointUpperLimit = {pendulo1_ulim, pendulo2_ulim,pendulo3_ulim}
+    
+
+    -- Create the client and initial connection
+    client, err = socket.connect(HOST, PORT)
+    client:setoption('keepalive', true)
+    Rx_float_length = 10
+    Tx_float_length = "%010.5f"
+    Tx_Rx_command_length = 5
+    
+    
+    -- Load the agent's model
+    agent=sim.loadModel(sim.getStringParam(sim.stringparam_scene_path)..'/invertedPendulum2.ttm')
+    -- agent=sim.loadModel(sim.getStringParam(sim.stringparam_scene_path)..'/Quadruped_long_leg.ttm')
+
+    -- Save the agent's model
+    agentData = sim.saveModel(agent)
+    sim.removeModel(agent)
+    
+    state = 0 -- state 0 = idle / 1 = moving to intermediate position / 2 = moving to target position / 3 = reset
+end
+
+local previous_velocity = 0
+local current_velocity = 0
+local acceleration = 0
+
+function sysCall_sensing()
+    if agentCreated == true then
+        -- Get the current velocity
+        current_velocity = sim.getJointVelocity(carrito)
+        
+        -- Calculate the acceleration
+        acceleration = (current_velocity - previous_velocity) / sim.getSimulationTimeStep()
+        
+        -- Update the previous velocity for the next time step
+        previous_velocity = current_velocity
+    end 
+    
+end
+function sysCall_beforeSimulation() -- Executed just before the simulation starts
+    -- Load the agent model
+    createAgent()
+    
+    agentCreated = true
+
+    jointPos={0.0,0.0,0.0}
+    jointVel = {0.0,0.0,0.0}
+    
+    local u1 = math.random()
+    local u2 = math.random()
+    local randStdNormal = math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
+    local randNormal1 = -math.pi + 2 * 45 * math.pi/180 * randStdNormal
+    local randNormal2 = 0+ 2 * 45 * math.pi/180 * randStdNormal
+    
+    sim.setJointPosition(joint[1],randNormal1)
+    sim.setJointPosition(joint[2],randNormal2)
+
+
+    state = 0
+
+end
+
+function sysCall_actuation()
+    if state == 3 then -- If state is 'reset'
+        -- Do nothing
+    elseif state == 0 then -- If state is 'idle'
+        --sim.pauseSimulation()
+
+        --Send the agent's measurements
+
+        ----------First the measurements only made in the simulation for the training (only for the reward and plotting)
+        
+
+        client:send(string.format(Tx_float_length, sim.getJointPosition(carrito)))
+        client:send(string.format(Tx_float_length, sim.getJointVelocity(carrito)))
+        client:send(string.format(Tx_float_length, acceleration))    
+        carrito_force =  sim.getJointForce(carrito)
+        
+        if carrito_force == None then
+            client:send(string.format(Tx_float_length, 0))
+        else
+            client:send(string.format(Tx_float_length, carrito_force))
+        end
+        --Joints angular positions
+        for i=1,joints_number,1 do
+            jointPos[i] = ((sim.getJointPosition(joint[i]) - (jointUpperLimit[i]+jointLowerLimit[i])/2)) / ((jointUpperLimit[i]-jointLowerLimit[i])/2)
+            client:send(string.format(Tx_float_length, math.cos(sim.getJointPosition(joint[i]))))
+            client:send(string.format(Tx_float_length, math.sin(sim.getJointPosition(joint[i]))))
+        end
+        --print("Pendulo angle".. sim.getJointPosition(joint[1]))
+        for i=1,joints_number,1 do
+            jointVel[i] = sim.getJointVelocity(joint[i])  / ((jointUpperLimit[i]-jointLowerLimit[i])/2)
+            client:send(string.format(Tx_float_length, jointVel[i]))
+        end
+
+        --Receive the agent's next action
+        data = {}
+        data, status, partial_data = client:receive(Tx_Rx_command_length)
+        --print(data)
+        if data=="RESET" then
+            --print("RESET: Environment reset")
+            --Get new position
+            reset_pos[1], status, partial_data = client:receive(Rx_float_length)
+            reset_pos[2], status, partial_data = client:receive(Rx_float_length)
+            reset_or[3], status, partial_data = client:receive(Rx_float_length)
+            reset_or[3] = math.pi * reset_or[3]
+            --Destroy the agent and restart the simulation
+            agentCreated = false    --To stop measuring velocity
+            destroyAgent()
+            state = 3
+            sim.stopSimulation()
+
+        elseif data=="ACT__" then
+
+            --print("ACT__: Action")
+            if mode == 0 then
+                --Receive joints target positions and set the midpoint targets
+                data,status,partial_data = client:receive(Rx_float_length)
+                sim.setJointTargetForce(carrito,15*tonumber(data))
+                --print("Torque".. 2*tonumber(data))
+                
+            end
+            --Signal midpoint flag
+            state = 1
+        else
+            --print("MODE_: Mode change")
+            --Receive new mode
+            data, status, partial_data = client:receive(Rx_float_length)
+            mode = tonumber(data)
+        end
+
+    elseif mode == 0 then -- If state is not 'idle' and mode is joint control
+
+        
+             
+        state = 0
+
+  
+    end
+
+end
+
+function sysCall_afterSimulation() -- Executed just before the simulation ends
+    -- Destroy the inverse kinematics environment
+    if state ~= 3 then  end
+
+    collectgarbage()
+end
+
+function sysCall_cleanup() -- Executed when the scene is closed
+    -- Close the communication socket
+    client:close()
+end
+
+function sysCall_nonSimulation() -- Executed when the simulation is not running
+    -- Restart the simulation
+    if state == 3 then sim.startSimulation() end
+end
+
+-- See the user manual or the available code snippets for additional callback functions and details

@@ -1,0 +1,77 @@
+ def compute_reward_and_end(self, obs, next_obs):
+        # Compute reward for every individual transition (state -> next_state)
+
+            # Final distance to evaluate end condition
+        dist_fin = np.sqrt(np.sum(np.square(next_obs[:,0:2]), axis=1, keepdims=True))
+
+            # Velocity vector from every state observed
+
+        carrito = next_obs[:,0]
+        carrito_vel = next_obs[:,1]
+        carrito_force = next_obs[:,2]
+
+        pendulo1 = next_obs[:,3] * np.pi
+        pendulo2 = next_obs[:,4] * np.pi 
+
+        pendulo1_vel = next_obs[:,5]
+        pendulo2_vel = next_obs[:,6]
+
+
+        # Empty vectors to store reward and end flags for every transition
+        reward, end = np.zeros((obs.shape[0], self.rwd_dim)), np.zeros((obs.shape[0], 1))
+
+        for i in range(obs.shape[0]):
+
+            
+            #reward[i,0] = np.cos(pendulo1)+0.5
+
+            # print("Pendulo1 = ", pendulo1*180/np.pi)
+            # print("Pendulo2 = ", pendulo2*180/np.pi)
+
+            if (abs(pendulo1)>=(12*np.pi/180)) or (abs(pendulo2)>=(6*np.pi/180)):
+
+                reward[i,0] = -1
+                #print("ENTRE")
+
+
+            if abs(pendulo1)<=4*np.pi/180 and abs(pendulo2)<=0.5*np.pi/180:
+
+                reward[i,0] = +1
+
+
+            # reward1 = -np.exp(5*np.abs(pendulo1))+2
+            # reward2 = -np.exp(5*np.abs(pendulo2))+2
+
+            # if reward1<=0 and reward2<=0:
+            #     reward[i,0] = -reward1*reward2
+            # else:
+            #     reward[i,0] = reward1*reward2
+            #reward[i,0] = -np.exp(5*np.abs(pendulo1))+2
+            
+            #reward[i,1] = -np.exp(5*np.abs(pendulo2))+2
+
+            #reward[i,2] = -0.1*pendulo1_vel**2
+
+            #reward[i,3] = -0.1*pendulo2_vel**2
+
+            #reward[i,4] = -0.1*carrito_force**2
+
+            #print("Pendulo2 rwd",reward[i,1])
+
+
+
+
+
+
+
+            if carrito >=2 or carrito <= -2:
+                end[i] = True
+            else: 
+                end[i] = False
+
+            if np.abs(pendulo1) >= 25*np.pi/180 or np.abs(pendulo2) >= 25*np.pi/180:
+               end[i] = True 
+
+            #print(pendulo1)
+
+        return reward, end
